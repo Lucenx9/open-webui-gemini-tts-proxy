@@ -23,9 +23,17 @@ DEFAULT_VOICE = os.getenv("GEMINI_TTS_VOICE", "Charon")
 OPENROUTER_TIMEOUT_SECONDS = float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "180"))
 OPENROUTER_RETRIES = int(os.getenv("OPENROUTER_RETRIES", "2"))
 OPENROUTER_CONCURRENCY = int(os.getenv("OPENROUTER_CONCURRENCY", "2"))
+MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "16000"))
+MAX_CHUNKS_PER_REQUEST = int(os.getenv("MAX_CHUNKS_PER_REQUEST", "64"))
 MAX_CHARS_PER_UPSTREAM_REQUEST = int(os.getenv("MAX_CHARS_PER_UPSTREAM_REQUEST", "320"))
 SILENCE_BETWEEN_CHUNKS_MS = int(os.getenv("SILENCE_BETWEEN_CHUNKS_MS", "80"))
 PCM_EDGE_FADE_MS = int(os.getenv("PCM_EDGE_FADE_MS", "12"))
+MP3_BITRATE = os.getenv("MP3_BITRATE", "192k")
+MP3_SAMPLE_RATE = int(os.getenv("MP3_SAMPLE_RATE", "44100"))
+FFMPEG_AUDIO_FILTER = os.getenv(
+    "FFMPEG_AUDIO_FILTER",
+    "highpass=f=80,equalizer=f=3500:t=q:w=1.0:g=1.5",
+)
 
 SUPPORTED_MODELS = [
     "google/gemini-3.1-flash-tts-preview",
@@ -186,28 +194,37 @@ def _fade_pcm_edges(pcm: bytes, sample_rate: int, channels: int, fade_ms: int) -
 
 
 def _convert_pcm_to_mp3(pcm: bytes, sample_rate: int, channels: int) -> bytes:
-    proc = subprocess.run(
+    ffmpeg_command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "s16le",
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        str(channels),
+        "-i",
+        "pipe:0",
+    ]
+    if FFMPEG_AUDIO_FILTER:
+        ffmpeg_command.extend(["-af", FFMPEG_AUDIO_FILTER])
+    ffmpeg_command.extend(
         [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "s16le",
             "-ar",
-            str(sample_rate),
-            "-ac",
-            str(channels),
-            "-i",
-            "pipe:0",
+            str(MP3_SAMPLE_RATE),
             "-f",
             "mp3",
             "-codec:a",
             "libmp3lame",
             "-b:a",
-            "128k",
+            MP3_BITRATE,
             "pipe:1",
-        ],
+        ]
+    )
+    proc = subprocess.run(
+        ffmpeg_command,
         input=pcm,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -340,9 +357,20 @@ async def _create_speech(payload: dict[str, Any]) -> bytes:
 
     stats["speech_requests"] += 1
     input_text = str(upstream_payload.get("input", ""))
+    if len(input_text) > MAX_INPUT_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Input text is too long: {len(input_text)} chars, max {MAX_INPUT_CHARS}",
+        )
+
     chunks = _split_text(input_text, MAX_CHARS_PER_UPSTREAM_REQUEST)
     if not chunks:
         raise HTTPException(status_code=400, detail="Input text is empty")
+    if len(chunks) > MAX_CHUNKS_PER_REQUEST:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Input text produces too many TTS chunks: {len(chunks)}, max {MAX_CHUNKS_PER_REQUEST}",
+        )
 
     if len(chunks) == 1:
         audio, content_type = await _fetch_upstream_audio(upstream_payload, voice, model)
@@ -397,9 +425,14 @@ async def healthz() -> dict[str, Any]:
         "timeout_seconds": OPENROUTER_TIMEOUT_SECONDS,
         "retries": OPENROUTER_RETRIES,
         "concurrency": OPENROUTER_CONCURRENCY,
+        "max_input_chars": MAX_INPUT_CHARS,
+        "max_chunks_per_request": MAX_CHUNKS_PER_REQUEST,
         "max_chars_per_upstream_request": MAX_CHARS_PER_UPSTREAM_REQUEST,
         "silence_between_chunks_ms": SILENCE_BETWEEN_CHUNKS_MS,
         "pcm_edge_fade_ms": PCM_EDGE_FADE_MS,
+        "mp3_bitrate": MP3_BITRATE,
+        "mp3_sample_rate": MP3_SAMPLE_RATE,
+        "ffmpeg_audio_filter": FFMPEG_AUDIO_FILTER,
         "stats": stats,
     }
 
