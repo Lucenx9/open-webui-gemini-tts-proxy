@@ -24,7 +24,8 @@ OPENROUTER_TIMEOUT_SECONDS = float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "180"
 OPENROUTER_RETRIES = int(os.getenv("OPENROUTER_RETRIES", "2"))
 OPENROUTER_CONCURRENCY = int(os.getenv("OPENROUTER_CONCURRENCY", "2"))
 MAX_CHARS_PER_UPSTREAM_REQUEST = int(os.getenv("MAX_CHARS_PER_UPSTREAM_REQUEST", "320"))
-SILENCE_BETWEEN_CHUNKS_MS = int(os.getenv("SILENCE_BETWEEN_CHUNKS_MS", "140"))
+SILENCE_BETWEEN_CHUNKS_MS = int(os.getenv("SILENCE_BETWEEN_CHUNKS_MS", "80"))
+PCM_EDGE_FADE_MS = int(os.getenv("PCM_EDGE_FADE_MS", "12"))
 
 SUPPORTED_MODELS = [
     "google/gemini-3.1-flash-tts-preview",
@@ -148,6 +149,40 @@ def _split_text(text: str, max_chars: int) -> list[str]:
 def _silence_pcm(sample_rate: int, channels: int, duration_ms: int) -> bytes:
     frame_count = max(int(sample_rate * duration_ms / 1000), 0)
     return b"\x00" * frame_count * channels * 2
+
+
+def _fade_pcm_edges(pcm: bytes, sample_rate: int, channels: int, fade_ms: int) -> bytes:
+    if not pcm or fade_ms <= 0 or channels <= 0:
+        return pcm
+
+    sample_width = 2
+    frame_size = channels * sample_width
+    total_frames = len(pcm) // frame_size
+    fade_frames = min(int(sample_rate * fade_ms / 1000), total_frames // 2)
+    if fade_frames <= 1:
+        return pcm
+
+    aligned_length = total_frames * frame_size
+    data = bytearray(pcm[:aligned_length])
+    remainder = pcm[aligned_length:]
+
+    def scale_sample(position: int, gain: float) -> None:
+        sample = int.from_bytes(data[position : position + sample_width], "little", signed=True)
+        faded = max(min(int(sample * gain), 32767), -32768)
+        data[position : position + sample_width] = faded.to_bytes(sample_width, "little", signed=True)
+
+    for frame in range(fade_frames):
+        fade_in_gain = frame / fade_frames
+        fade_out_gain = (fade_frames - frame - 1) / fade_frames
+
+        start_base = frame * frame_size
+        end_base = (total_frames - fade_frames + frame) * frame_size
+        for channel in range(channels):
+            offset = channel * sample_width
+            scale_sample(start_base + offset, fade_in_gain)
+            scale_sample(end_base + offset, fade_out_gain)
+
+    return bytes(data) + remainder
 
 
 def _convert_pcm_to_mp3(pcm: bytes, sample_rate: int, channels: int) -> bytes:
@@ -338,7 +373,7 @@ async def _create_speech(payload: dict[str, Any]) -> bytes:
                     detail="Unexpected MP3 chunk from upstream while recombining split TTS audio",
                 )
             sample_rate, channels = _parse_audio_params(content_type)
-            pcm_parts.append(chunk_audio)
+            pcm_parts.append(_fade_pcm_edges(chunk_audio, sample_rate, channels, PCM_EDGE_FADE_MS))
             if idx < len(chunks):
                 pcm_parts.append(_silence_pcm(sample_rate, channels, SILENCE_BETWEEN_CHUNKS_MS))
         audio = b"".join(pcm_parts)
@@ -364,6 +399,7 @@ async def healthz() -> dict[str, Any]:
         "concurrency": OPENROUTER_CONCURRENCY,
         "max_chars_per_upstream_request": MAX_CHARS_PER_UPSTREAM_REQUEST,
         "silence_between_chunks_ms": SILENCE_BETWEEN_CHUNKS_MS,
+        "pcm_edge_fade_ms": PCM_EDGE_FADE_MS,
         "stats": stats,
     }
 

@@ -75,7 +75,8 @@ If Open WebUI runs in Docker on Linux and `host.docker.internal` is unavailable,
 | `OPENROUTER_RETRIES` | `2` | Retries for timeout, 429, and 5xx |
 | `OPENROUTER_CONCURRENCY` | `2` | Max concurrent upstream requests |
 | `MAX_CHARS_PER_UPSTREAM_REQUEST` | `320` | Long-text split size |
-| `SILENCE_BETWEEN_CHUNKS_MS` | `140` | Silence inserted between recombined chunks |
+| `SILENCE_BETWEEN_CHUNKS_MS` | `80` | Silence inserted between recombined chunks |
+| `PCM_EDGE_FADE_MS` | `12` | Short fade-in/out applied to chunk edges to reduce clicks |
 | `OPENROUTER_HTTP_REFERER` | `http://localhost:3000` | Optional OpenRouter referer header |
 | `OPENROUTER_X_TITLE` | `Open WebUI Gemini TTS Proxy` | Optional OpenRouter title header |
 
