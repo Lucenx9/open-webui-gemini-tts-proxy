@@ -1,0 +1,14 @@
+[Unit]
+Description=Gemini TTS PCM-to-MP3 proxy for Open WebUI
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/open-webui-gemini-tts-proxy
+EnvironmentFile=%h/open-webui-gemini-tts-proxy/.env
+ExecStart=%h/open-webui-gemini-tts-proxy/scripts/run.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

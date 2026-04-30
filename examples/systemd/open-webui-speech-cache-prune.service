@@ -1,0 +1,6 @@
+[Unit]
+Description=Prune Open WebUI speech cache
+
+[Service]
+Type=oneshot
+ExecStart=%h/open-webui-gemini-tts-proxy/scripts/prune-open-webui-speech-cache.sh
